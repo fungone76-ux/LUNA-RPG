@@ -1,0 +1,27 @@
+# venv / cache
+.venv/
+__pycache__/
+*.pyc
+
+# cartella test locale
+test/
+
+
+# secrets
+.env
+google_credentials.json
+
+
+MEDIOEVO/
+
+# output generati
+storage/
+outputs/
+*.png
+*.jpg
+*.mp4
+*.gif
+
+# IDE
+.vscode/
+.idea/
