@@ -65,7 +65,7 @@ class TextAddon:
 
 
 # Limiti: quante LoRA aggiungere al massimo come "extra" (oltre a quelle già nel prompt base)
-MAX_ADDITIONAL_LORAS = 0
+MAX_ADDITIONAL_LORAS = 2
 
 # Limiti per categoria (evita di mettere 3 style lora insieme e far deragliare l'identità)
 CATEGORY_LIMITS: Dict[str, int] = {
@@ -228,12 +228,6 @@ def apply_sd_prompt_rules(
     max_additional_loras: int = MAX_ADDITIONAL_LORAS,
     include_lora_triggers: bool = True,
 ) -> Tuple[str, str, Dict[str, List[str]]]:
-
-    # --- MODIFICA: BYPASS TOTALE ---
-    # Restituisce i prompt esattamente come sono arrivati, senza toccare nulla.
-    return positive_prompt, negative_prompt, {}
-    # -------------------------------
-
     """
     Applica regole basate su keyword a prompt SD.
 

@@ -11,9 +11,6 @@ test/
 .env
 google_credentials.json
 
-
-MEDIOEVO/
-
 # output generati
 storage/
 outputs/
