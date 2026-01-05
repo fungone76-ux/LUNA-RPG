@@ -1,241 +1,96 @@
 {
-  "1": {
+  "71": {
     "inputs": {
-      "unet_name": "wan2.2_ti2v_5b_q4_k_m.gguf"
+      "model": "Wan2_1-I2V-14B-720P_fp8_e4m3fn.safetensors",
+      "base_precision": "bf16",
+      "quantization": "disabled",
+      "load_device": "offload_device",
+      "attention_mode": "sdpa",
+      "rms_norm_function": "default"
     },
-    "class_type": "UnetLoaderGGUF",
-    "_meta": {
-      "title": "Unet Loader (GGUF)"
-    }
+    "class_type": "WanVideoModelLoader"
   },
-  "2": {
+  "108": {
     "inputs": {
-      "shift": 8,
-      "model": [
-        "1",
-        0
-      ]
+      "model_name": "Wan2_1_VAE_bf16.safetensors",
+      "precision": "bf16",
+      "use_cpu_cache": false
     },
-    "class_type": "ModelSamplingSD3",
-    "_meta": {
-      "title": "ModelSamplingSD3"
-    }
+    "class_type": "WanVideoVAELoader"
   },
-  "3": {
+  "176": {
     "inputs": {
-      "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
-      "type": "wan",
-      "device": "default"
-    },
-    "class_type": "CLIPLoader",
-    "_meta": {
-      "title": "Load CLIP"
-    }
-  },
-  "4": {
-    "inputs": {
-      "text": "__PROMPT_GEMINI__",
-      "clip": [
-        "3",
-        0
-      ]
-    },
-    "class_type": "CLIPTextEncode",
-    "_meta": {
-      "title": "CLIP Text Encode (Positive Prompt)"
-    }
-  },
-  "5": {
-    "inputs": {
-      "text": "low quality, worst quality, blurry, jpeg artifacts, watermark, text, logo, static image, frozen frame, bad anatomy, extra fingers, deformed hands, deformed face, duplicate body, glitch, oversaturated, overexposed, morphing, melting",
-      "clip": [
-        "3",
-        0
-      ]
-    },
-    "class_type": "CLIPTextEncode",
-    "_meta": {
-      "title": "CLIP Text Encode (Negative Prompt)"
-    }
-  },
-  "6": {
-    "inputs": {
-      "vae_name": "wan2.2_vae.safetensors"
-    },
-    "class_type": "VAELoader",
-    "_meta": {
-      "title": "Load VAE"
-    }
-  },
-  "7": {
-    "inputs": {
-      "image": "scene_placeholder.png",
+      "image": "input_test.png",
       "upload": "image"
     },
-    "class_type": "LoadImage",
-    "_meta": {
-      "title": "Load Image"
-    }
+    "class_type": "LoadImage"
   },
-  "8": {
+  "180": {
     "inputs": {
       "width": 1280,
       "height": 720,
-      "length": 65,
-      "batch_size": 1,
-      "vae": [
-        "6",
-        0
-      ],
-      "start_image": [
-        "13",
-        0
-      ]
+      "upscale_method": "lanczos",
+      "keep_proportion": "crop",
+      "divisible_by": 16,
+      "image": [ "176", 0 ]
     },
-    "class_type": "Wan22ImageToVideoLatent",
-    "_meta": {
-      "title": "Wan22 Latent (HD 720p)"
-    }
+    "class_type": "ImageResizeKJv2"
   },
-  "9": {
+  "286": {
     "inputs": {
-      "add_noise": "enable",
-      "noise_seed": 124409335695547,
-      "steps": 30,
-      "cfg": 6.0,
-      "sampler_name": "uni_pc",
-      "scheduler": "simple",
-      "start_at_step": 0,
-      "end_at_step": 10000,
-      "return_with_leftover_noise": "enable",
-      "model": [
-        "2",
-        0
-      ],
-      "positive": [
-        "4",
-        0
-      ],
-      "negative": [
-        "5",
-        0
-      ],
-      "latent_image": [
-        "8",
-        0
-      ]
+      "vae": [ "108", 0 ],
+      "image": [ "180", 0 ],
+      "noise_aug_strength": 0.01,
+      "latent_strength": 1.0
     },
-    "class_type": "KSamplerAdvanced",
-    "_meta": {
-      "title": "KSamplerAdvanced (High Quality Settings)"
-    }
+    "class_type": "WanVideoEncode"
   },
-  "10": {
-    "inputs": {
-      "tile_size": 256,
-      "overlap": 64,
-      "temporal_size": 64,
-      "temporal_overlap": 8,
-      "samples": [
-        "15",
-        0
-      ],
-      "vae": [
-        "6",
-        0
-      ]
-    },
-    "class_type": "VAEDecodeTiled",
-    "_meta": {
-      "title": "VAE Decode (Tiled)"
-    }
-  },
-  "11": {
-    "inputs": {
-      "fps": 24,
-      "images": [
-        "14",
-        0
-      ]
-    },
-    "class_type": "CreateVideo",
-    "_meta": {
-      "title": "Create Video"
-    }
-  },
-  "12": {
-    "inputs": {
-      "filename_prefix": "video/ComfyUI",
-      "format": "auto",
-      "codec": "auto",
-      "video": [
-        "11",
-        0
-      ]
-    },
-    "class_type": "SaveVideo",
-    "_meta": {
-      "title": "Save Video"
-    }
-  },
-  "13": {
+  "282": {
     "inputs": {
       "width": 1280,
       "height": 720,
-      "interpolation": "lanczos",
-      "method": "pad",
-      "condition": "always",
-      "multiple_of": 0,
-      "image": [
-        "7",
-        0
-      ]
+      "num_frames": 81,
+      "extra_latents": [ "286", 0 ]
     },
-    "class_type": "ImageResize+",
-    "_meta": {
-      "title": "🔧 Image Resize HD"
-    }
+    "class_type": "WanVideoEmptyEmbeds"
   },
-  "14": {
+  "287": {
     "inputs": {
-      "ckpt_name": "rife47.pth",
-      "clear_cache_after_n_frames": 24,
-      "multiplier": 2,
-      "fast_mode": true,
-      "ensemble": true,
-      "scale_factor": 1,
-      "frames": [
-        "16",
-        0
-      ]
+      "model_name": "umt5-xxl-enc-bf16.safetensors",
+      "precision": "bf16",
+      "positive_prompt": "cinematic portrait, hyperrealistic, 4k",
+      "negative_prompt": "low quality, blurry",
+      "device": "gpu"
     },
-    "class_type": "RIFE VFI",
-    "_meta": {
-      "title": "RIFE VFI (Fluidity)"
-    }
+    "class_type": "WanVideoTextEncodeCached"
   },
-  "15": {
+  "288": {
     "inputs": {
-      "anything": [
-        "9",
-        0
-      ]
+      "steps": 15,
+      "cfg": 1.0,
+      "scheduler": "euler",
+      "model": [ "71", 0 ],
+      "image_embeds": [ "282", 0 ],
+      "text_embeds": [ "287", 0 ]
     },
-    "class_type": "easy cleanGpuUsed",
-    "_meta": {
-      "title": "Clean VRAM Used"
-    }
+    "class_type": "WanVideoSamplerSettings"
   },
-  "16": {
+  "284": {
+    "inputs": { "sampler_inputs": [ "288", 0 ] },
+    "class_type": "WanVideoSamplerFromSettings"
+  },
+  "283": {
     "inputs": {
-      "anything": [
-        "10",
-        0
-      ]
+      "vae": [ "108", 0 ],
+      "samples": [ "284", 0 ]
     },
-    "class_type": "easy cleanGpuUsed",
-    "_meta": {
-      "title": "Clean VRAM Used"
-    }
+    "class_type": "WanVideoDecode"
+  },
+  "292": {
+    "inputs": {
+      "images": [ "283", 0 ],
+      "format": "video/h264-mp4"
+    },
+    "class_type": "VHS_VideoCombine"
   }
 }
