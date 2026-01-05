@@ -20,12 +20,18 @@ client = genai.Client(api_key=API_KEY) if API_KEY else None
 
 
 def get_gemini_prompt(text):
-    """Migliora il prompt con Gemini per LongCat."""
+    """Migliora il prompt con Gemini specificamente per LongCat/WanVideo."""
     if not client: return text
     try:
+        # Istruzione aggiornata per LongCat
+        instruction = (
+            "TASK: Convert this input into a high-quality, detailed English visual description "
+            "for LongCat (WanVideo) generation. Focus on cinematic movement, lighting, and "
+            "consistency. RULE: Output ONLY the raw text. Input: "
+        )
         response = client.models.generate_content(
             model="gemini-2.0-flash",
-            contents=f"TASK: Convert this input into a SINGLE, concise English visual description for AI video generation. RULE: Output ONLY the raw text of the prompt. No 'Here are options', no Markdown, no lists, no explanations. Just the prompt string. Input: {text}"
+            contents=f"{instruction}{text}"
         )
         return response.text.strip() if response.text else text
     except:

@@ -1,0 +1,170 @@
+{
+  "71": {
+    "inputs": {
+      "model": "LongCat/LongCat_TI2V_comfy_fp8_e4m3fn_scaled_KJ.safetensors",
+      "base_precision": "bf16",
+      "quantization": "disabled",
+      "load_device": "offload_device",
+      "attention_mode": "sdpa",
+      "rms_norm_function": "default"
+    },
+    "class_type": "WanVideoModelLoader"
+  },
+  "103": {
+    "inputs": {
+      "model": ["123", 0],
+      "block_swap_args": ["104", 0]
+    },
+    "class_type": "WanVideoSetBlockSwap"
+  },
+  "104": {
+    "inputs": {
+      "blocks_to_swap": 20,
+      "offload_img_emb": true,
+      "offload_txt_emb": true,
+      "use_non_blocking": true,
+      "prefetch_blocks": 1
+    },
+    "class_type": "WanVideoBlockSwap"
+  },
+  "108": {
+    "inputs": {
+      "model_name": "Wan2_1_VAE_bf16.safetensors",
+      "precision": "bf16",
+      "use_cpu_cache": false
+    },
+    "class_type": "WanVideoVAELoader"
+  },
+  "123": {
+    "inputs": {
+      "model": ["71", 0],
+      "lora": ["169", 0]
+    },
+    "class_type": "WanVideoSetLoRAs"
+  },
+  "148": {
+    "inputs": { "value": 13 },
+    "class_type": "INTConstant"
+  },
+  "169": {
+    "inputs": {
+      "lora": "LongCat_distill_lora_rank128_bf16.safetensors",
+      "strength": 1.0,
+      "low_mem_load": true,
+      "merge_loras": false
+    },
+    "class_type": "WanVideoLoraSelect"
+  },
+  "176": {
+    "inputs": { "image": "example.png", "upload": "image" },
+    "class_type": "LoadImage"
+  },
+  "180": {
+    "inputs": {
+      "width": 832,
+      "height": 480,
+      "upscale_method": "lanczos",
+      "keep_proportion": "crop",
+      "divisible_by": 16,
+      "image": ["176", 0]
+    },
+    "class_type": "ImageResizeKJv2"
+  },
+  "282": {
+    "inputs": {
+      "width": 832,
+      "height": 480,
+      "num_frames": 81,
+      "extra_latents": ["286", 0]
+    },
+    "class_type": "WanVideoEmptyEmbeds"
+  },
+  "283": {
+    "inputs": {
+      "enable_vae_tiling": true,
+      "tile_x": 256,
+      "tile_y": 256,
+      "tile_stride_x": 128,
+      "tile_stride_y": 128,
+      "normalization": "default",
+      "vae": ["108", 0],
+      "samples": ["284", 0]
+    },
+    "class_type": "WanVideoDecode"
+  },
+  "284": {
+    "inputs": { "sampler_inputs": ["288", 0] },
+    "class_type": "WanVideoSamplerFromSettings"
+  },
+  "285": {
+    "inputs": {
+      "overlap": ["148", 0],
+      "source_images": ["180", 0],
+      "overlap_mode": "cut"
+    },
+    "class_type": "ImageBatchExtendWithOverlap"
+  },
+  "286": {
+    "inputs": {
+      "enable_vae_tiling": true,
+      "tile_x": 256,
+      "tile_y": 256,
+      "tile_stride_x": 128,
+      "tile_stride_y": 128,
+      "noise_aug_strength": 0,
+      "latent_strength": 1,
+      "vae": ["108", 0],
+      "image": ["285", 0]
+    },
+    "class_type": "WanVideoEncode"
+  },
+  "287": {
+    "inputs": {
+      "model_name": "umt5-xxl-enc-bf16.safetensors",
+      "precision": "bf16",
+      "positive_prompt": "__PROMPT_GEMINI__",
+      "negative_prompt": "low quality, blurry, bad anatomy",
+      "quantization": "disabled",
+      "use_disk_cache": true,
+      "device": "cpu"
+    },
+    "class_type": "WanVideoTextEncodeCached"
+  },
+  "288": {
+    "inputs": {
+      "steps": 10,
+      "cfg": 1.0,
+      "shift": 8.0,
+      "seed": 12345,
+      "force_offload": true,
+      "scheduler": "longcat_distill_euler",
+      "riflex_freq_index": 0,
+      "denoise_strength": 1.0,
+      "batched_cfg": false,
+      "rope_function": "comfy",
+      "start_step": 0,
+      "end_step": -1,
+      "add_noise_to_samples": false,
+      "model": ["103", 0],
+      "image_embeds": ["282", 0],
+      "text_embeds": ["287", 0]
+    },
+    "class_type": "WanVideoSamplerSettings"
+  },
+  "292": {
+    "inputs": {
+      "frame_rate": 15,
+      "loop_count": 0,
+      "filename_prefix": "LongCat_Generated",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 23,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "images": ["283", 0]
+    },
+    "class_type": "VHS_VideoCombine"
+  }
+}
