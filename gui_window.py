@@ -521,22 +521,31 @@ class GameWindow(QMainWindow):
         user_input, ok = QInputDialog.getMultiLineText(
             self,
             "Generazione Video (ComfyUI)",
-            "Descrivi la scena per Wan 2.2:\n(Gemini la tradurrà in prompt tecnico)",
+            "Descrivi la scena:
+(Gemini la trasformerà in prompt video tecnico)",
             default_context
         )
-        if not ok: return
+        if not ok:
+            return
         context_text = user_input.strip()
 
-        # 3. Setup Percorso
-        image_stem = Path(self._last_image_path).stem
-        expected_video_path = Path("storage/videos") / f"{image_stem}_comfy.mp4"
+        # 3. Setup Percorso (ASSOLUTO, così salva sempre sul PC nel progetto)
+        base_dir = Path(__file__).resolve().parent
+        videos_dir = base_dir / "storage" / "videos"
+        videos_dir.mkdir(parents=True, exist_ok=True)
 
-        # Rimuove vecchio file
-        if expected_video_path.exists():
-            try:
-                os.remove(expected_video_path)
-            except:
-                pass
+        image_stem = Path(self._last_image_path).stem
+        expected_video_base = videos_dir / f"{image_stem}_comfy"
+        expected_video_path = expected_video_base.with_suffix(".mp4")
+
+        # Rimuove eventuali vecchi output (qualsiasi estensione comune)
+        for ext in (".mp4", ".webm", ".mov", ".mkv", ".gif"):
+            p = expected_video_base.with_suffix(ext)
+            if p.exists():
+                try:
+                    p.unlink()
+                except Exception:
+                    pass
 
         # 4. AVVIO THREAD
         self.status_label.setText("ComfyUI in background... La finestra rimane attiva.")
@@ -549,21 +558,41 @@ class GameWindow(QMainWindow):
         self._video_thread.start()
 
     def _on_video_finished(self, path_str: str):
-        """Slot chiamato quando il thread finisce con successo."""
+        """Chiamata quando il video è pronto e salvato sul PC."""
         self._video_thread = None
         self.video_button.setEnabled(True)
         self.video_button.setText("Genera Video (ComfyUI)")
         self.status_label.setText("Video Creato!")
 
-        # Apre il video
-        res = QMessageBox.question(
-            self,
-            "Video Pronto",
-            f"Video salvato in:\n{path_str}\n\nVuoi aprirlo?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        if res == QMessageBox.Yes:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(path_str))
+        # Apri automaticamente il video nel player di sistema
+        from pathlib import Path
+        import os
+        import sys
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtWidgets import QMessageBox
+
+        video_path = str(Path(path_str).resolve())
+        if not os.path.exists(video_path):
+            QMessageBox.warning(self, "Video non trovato", f"Il file video non esiste:\n{video_path}")
+            return
+
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(video_path))
+
+        # Fallback Windows se QDesktopServices non apre
+        if not opened and sys.platform.startswith("win"):
+            try:
+                os.startfile(video_path)  # type: ignore[attr-defined]
+                opened = True
+            except Exception:
+                opened = False
+
+        if not opened:
+            QMessageBox.information(
+                self,
+                "Video pronto",
+                f"Video salvato in:\n{video_path}\n\nNon sono riuscita ad aprirlo automaticamente: aprilo manualmente.",
+            )
 
     def _on_video_error(self, err_msg: str):
         """Slot chiamato quando il thread fallisce."""
