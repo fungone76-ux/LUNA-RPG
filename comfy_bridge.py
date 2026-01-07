@@ -29,6 +29,21 @@ client = genai.Client(api_key=API_KEY) if API_KEY else None
 # La teniamo comunque: se un domani monti la cartella output del pod sul PC, tornerà utile.
 COMFY_OUTPUT_PATH = (os.getenv("COMFY_OUTPUT_PATH", "") or "").strip()
 
+def _is_local_comfy() -> bool:
+    """True only when COMFY_URL points to localhost/127.0.0.1."""
+    try:
+        host = urlparse(COMFY_URL).hostname or ""
+    except Exception:
+        host = ""
+    host = host.lower().strip()
+    return host in ("127.0.0.1", "localhost")
+
+
+# Polling /history (utile quando il WebSocket cade o quando l'output arriva in ritardo)
+COMFY_POLL_INTERVAL_SEC = float(os.getenv("COMFY_POLL_INTERVAL_SEC", "2") or "2")
+COMFY_MAX_WAIT_SEC = int(os.getenv("COMFY_MAX_WAIT_SEC", "1800") or "1800")  # 30 min default
+COMFY_WS_RECV_TIMEOUT_SEC = float(os.getenv("COMFY_WS_RECV_TIMEOUT_SEC", "10") or "10")
+
 
 # ---------------------------------------------------------------------------
 # Gemini (IT -> EN + prompt engineer)
@@ -46,24 +61,26 @@ def get_gemini_prompt(prompt_it: str) -> str:
     print(f"🧠 [Gemini] Prompt engineer I2V (da IT): '{prompt_it}'")
 
     sys_instruction = """
-You are an elite AI video prompt engineer specialized in image-to-video (I2V) models (Wan/LongCat style).
-Task:
-1) Translate the user prompt from Italian to English.
-2) Upgrade it into a production-grade I2V prompt that preserves the original intent and is optimized for temporal coherence.
+    You are an elite AI video prompt engineer specialized in image-to-video (I2V) models (Wan/LongCat style).
+    Task:
+    1) Translate the user prompt from Italian to English.
+    2) Upgrade it into a production-grade I2V prompt that preserves the original intent and is optimized for temporal coherence.
 
-Rules (must follow):
-- Preserve the scene content and meaning; you may add cinematic details ONLY if consistent (camera, lighting, mood, motion).
-- Assume I2V: the input image is the reference. Preserve identity, face, clothing, composition. Avoid drift.
-- Add clear, natural motion cues (what moves, how fast, how the camera moves). Prefer subtle realistic motion.
-- Avoid contradictions (no sudden outfit changes, no teleporting, no time jumps).
-- Do NOT include technical parameters (no fps, steps, resolution, sampler, seed, model names).
-- Output ONLY the final English positive prompt (single paragraph). No quotes, no markdown, no extra text.
+    Rules (must follow):
+    - Preserve the scene content and meaning; you may add cinematic details ONLY if consistent (lighting, mood, subtle motion).
+    - Assume I2V: the input image is the reference. Preserve identity, face, clothing, and composition. Avoid drift.
+    - Default camera behavior MUST be: locked-off tripod, static shot, no zoom, no push-in, no dolly, no reframing.
+      Only include camera movement if the user explicitly asks for it in the Italian prompt.
+    - Keep framing consistent. If not specified by user, keep full body in frame (head-to-toe) throughout.
+    - Add clear, natural motion cues for the subject (subtle realistic motion). Avoid big motions.
+    - Avoid contradictions (no sudden outfit changes, no teleporting, no time jumps).
+    - Do NOT include technical parameters (no fps, steps, resolution, sampler, seed, model names).
+    - Output ONLY the final English positive prompt (single paragraph). No quotes, no markdown, no extra text.
 
-Quality hints to include naturally:
-- cinematic realism, stable details, sharp focus where needed
-- smooth camera movement, consistent lighting, minimal flicker
-- realistic physics for fabric/hair, subtle micro-movements (breathing/blinking) when appropriate
-"""
+    Quality hints to include naturally:
+    - cinematic realism, stable details, consistent lighting, minimal flicker
+    - realistic physics for fabric/hair, subtle micro-movements (breathing/blinking) when appropriate
+    """
 
     try:
         response = client.models.generate_content(
@@ -159,6 +176,68 @@ def _download_comfy_file(filename: str, subfolder: str, file_type: str, dest_pat
     return dest_path
 
 
+
+def _collect_candidate_files(obj) -> list[tuple[str, str, str]]:
+    """
+    Raccoglie ricorsivamente candidati file da un JSON (history o output WS).
+    Ritorna list di tuple: (filename, subfolder, type).
+    """
+    out: list[tuple[str, str, str]] = []
+
+    def walk(x):
+        if isinstance(x, dict):
+            # formato Comfy tipico: {"filename": "...", "subfolder": "", "type": "output"}
+            fn = x.get("filename")
+            if isinstance(fn, str) and fn.strip():
+                out.append((fn.strip(), (x.get("subfolder") or ""), (x.get("type") or "output")))
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for it in x:
+                walk(it)
+
+    walk(obj)
+    return out
+
+
+def _pick_best_video(candidates: list[tuple[str, str, str]]) -> tuple[str, str, str] | None:
+    """
+    Sceglie il candidato migliore tra filename/subfolder/type.
+    Preferisce mp4 > webm > mov > mkv > gif.
+    """
+    if not candidates:
+        return None
+
+    def score(fn: str) -> int:
+        fn = fn.lower()
+        if fn.endswith(".mp4"):
+            return 0
+        if fn.endswith(".webm"):
+            return 1
+        if fn.endswith(".mov"):
+            return 2
+        if fn.endswith(".mkv"):
+            return 3
+        if fn.endswith(".gif"):
+            return 4
+        return 9
+
+    # dedup
+    seen = set()
+    uniq = []
+    for fn, sub, typ in candidates:
+        key = (fn, sub, typ)
+        if key not in seen:
+            uniq.append((fn, sub, typ))
+            seen.add(key)
+
+    uniq.sort(key=lambda t: score(t[0]))
+    best = uniq[0]
+    if score(best[0]) >= 9:
+        return None
+    return best
+
+
 def get_latest_video_file(folder: str, max_age_seconds: int = 300) -> str | None:
     """
     Cerca il file video più recente in una cartella locale (utile solo se COMFY_OUTPUT_PATH è montata sul PC).
@@ -196,29 +275,87 @@ def track_and_download(ws: websocket.WebSocket, prompt_id: str, output_filename:
     """
     print("⏳ [ComfyUI] Rendering in corso...")
 
-    # 1) Attesa completamento (evento 'executing' con node=None)
-    while True:
+    ws_candidates: list[tuple[str, str, str]] = []
+
+    # Imposta timeout di ricezione WS: evita blocchi infiniti dietro proxy/rete instabile
+    try:
+        ws.settimeout(COMFY_WS_RECV_TIMEOUT_SEC)
+    except Exception:
+        pass
+
+    deadline = time.time() + COMFY_MAX_WAIT_SEC
+    ws_finished = False
+
+    # 1) Attesa completamento: preferiamo WS per capire quando ha finito,
+    # ma se il WS cade/timeout, non interrompiamo: continuiamo a pollare /history.
+    last_poll = 0.0
+
+    while time.time() < deadline:
+        # (a) prova a leggere un messaggio WS
         try:
             raw = ws.recv()
-            if not raw:
-                continue
-            if isinstance(raw, bytes):
-                raw = raw.decode("utf-8", errors="ignore")
-            message = json.loads(raw)
+            if raw:
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="ignore")
+                message = json.loads(raw)
 
-            if message.get("type") == "executing":
-                data = message.get("data", {})
-                if data.get("prompt_id") == prompt_id and data.get("node") is None:
-                    print("✅ [ComfyUI] Esecuzione finita!")
-                    break
+                mtype = message.get("type")
+                data = message.get("data", {}) if isinstance(message, dict) else {}
+
+                if mtype == "executed":
+                    if data.get("prompt_id") == prompt_id:
+                        ws_candidates.extend(_collect_candidate_files(data.get("output", {})))
+
+                if mtype == "executing":
+                    if data.get("prompt_id") == prompt_id and data.get("node") is None:
+                        ws_finished = True
+        except websocket._exceptions.WebSocketTimeoutException:
+            # nessun messaggio, ok: andiamo avanti a pollare
+            pass
         except Exception:
-            # se cade il WS, proviamo comunque a recuperare via history
-            break
+            # WS caduto: continuiamo comunque con /history
+            pass
 
-    time.sleep(2)
+        # (b) poll /history a intervalli regolari
+        now = time.time()
+        if (now - last_poll) >= COMFY_POLL_INTERVAL_SEC or ws_finished:
+            last_poll = now
+
+            best = None
+            hist = None
+            try:
+                hist = _get_history_item(prompt_id)
+            except Exception:
+                hist = None
+
+            candidates = []
+            candidates.extend(ws_candidates)
+            if isinstance(hist, dict):
+                candidates.extend(_collect_candidate_files(hist.get("outputs", {})))
+                candidates.extend(_collect_candidate_files(hist.get("output", {})))
+                candidates.extend(_collect_candidate_files(hist))
+
+            best = _pick_best_video(candidates)
+            if best:
+                # appena lo vediamo, usciamo dal loop e scarichiamo
+                chosen = best
+                break
+
+            # se ha finito ma ancora niente in /history, aspettiamo (ritardo normale)
+            if ws_finished:
+                print("⌛ [ComfyUI] Finito, ma output non ancora disponibile in /history...")
+
+        time.sleep(0.2)
+    else:
+        chosen = None
+
 
     # 2) Modalità "più recente" da filesystem (SOLO se la cartella è visibile dal PC)
-    if COMFY_OUTPUT_PATH and os.path.exists(COMFY_OUTPUT_PATH):
+    # 2) Modalità "più recente" da filesystem (SOLO se:
+    #    - COMFY_OUTPUT_PATH è visibile dal PC
+    #    - e ComfyUI è davvero locale (localhost/127.0.0.1)
+    #    Se ComfyUI è remoto (RunPod/proxy), si passa direttamente al download via API.
+    if COMFY_OUTPUT_PATH and os.path.exists(COMFY_OUTPUT_PATH) and _is_local_comfy():
         source_path = get_latest_video_file(COMFY_OUTPUT_PATH)
         if source_path and os.path.exists(source_path):
             try:
@@ -229,48 +366,49 @@ def track_and_download(ws: websocket.WebSocket, prompt_id: str, output_filename:
                 return output_filename
             except Exception as e:
                 print(f"❌ Errore copia file: {e}")
-                return None
+                # fallback API
+        else:
+            print(f"⚠️ Nessun video recente trovato in {COMFY_OUTPUT_PATH}. Provo download via API (/history + /view)...")
 
-        print(f"❌ Nessun video recente trovato in {COMFY_OUTPUT_PATH}")
-        return None
 
     # 3) PC -> Pod remoto: scarica il file prodotto da quel prompt_id (affidabile)
     try:
-        hist = _get_history_item(prompt_id)
-        outputs = (hist or {}).get("outputs", {})
+        # Se nel loop sopra abbiamo già scelto un file, usiamolo.
+        if 'chosen' in locals() and chosen:
+            fn, sub, typ = chosen
+            saved = _download_comfy_file(fn, sub, typ, output_filename)
+            print(f"💾 Video scaricato con successo in: {saved}")
+            return saved
 
-        # raccogli candidati video/gif
+        # Altrimenti facciamo un ultimo tentativo di lettura history (potrebbe arrivare in ritardo)
+        hist = None
+        try:
+            hist = _get_history_item(prompt_id)
+        except Exception:
+            hist = None
+
         candidates = []
-        for _node_id, out in outputs.items():
-            for key in ("videos", "gifs"):
-                items = out.get(key)
-                if isinstance(items, list):
-                    for it in items:
-                        fn = it.get("filename")
-                        if fn:
-                            candidates.append((fn, it.get("subfolder", ""), it.get("type", "output")))
+        candidates.extend(ws_candidates)
+        if isinstance(hist, dict):
+            candidates.extend(_collect_candidate_files(hist.get("outputs", {})))
+            candidates.extend(_collect_candidate_files(hist.get("output", {})))
+            candidates.extend(_collect_candidate_files(hist))
 
-        if not candidates:
-            print("❌ Nessun output video trovato in /history per questo prompt_id.")
+        best = _pick_best_video(candidates)
+        if not best:
+            print("❌ Nessun output video trovato in /history per questo prompt_id (probabile job non finito o errore su ComfyUI).")
             return None
 
-        # scegli il migliore: preferisci mp4 > webm > gif > altro
-        def score(fn: str) -> int:
-            fn = fn.lower()
-            if fn.endswith(".mp4"):
-                return 0
-            if fn.endswith(".webm"):
-                return 1
-            if fn.endswith(".mov"):
-                return 2
-            if fn.endswith(".mkv"):
-                return 3
-            if fn.endswith(".gif"):
-                return 4
-            return 9
+        fn, sub, typ = best
+        saved = _download_comfy_file(fn, sub, typ, output_filename)
+        print(f"💾 Video scaricato con successo in: {saved}")
+        return saved
 
-        candidates.sort(key=lambda t: score(t[0]))
-        fn, sub, typ = candidates[0]
+    except Exception as e:
+        print(f"❌ Errore download via API: {e}")
+        return None
+
+        fn, sub, typ = best
         saved = _download_comfy_file(fn, sub, typ, output_filename)
         print(f"💾 Video scaricato con successo in: {saved}")
         return saved

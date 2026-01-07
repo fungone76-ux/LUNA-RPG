@@ -1,147 +1,271 @@
 # file: game_state.py
-import random
-from typing import Dict, Any
+from __future__ import annotations
 
-# --- CONFIGURAZIONE INIZIALE DEI PERSONAGGI ---
-# Qui definiamo lo stato di default per ogni ragazza.
-# Se il gioco viene resettato, si parte da qui.
-NPC_DEFAULTS = {
+import random
+from copy import deepcopy
+from typing import Any, Dict, List, Optional
+
+
+# =============================================================================
+# LUNA RPG — GAME STATE (coerente con campaign_story + canovaccio DM)
+# =============================================================================
+# Obiettivo di questo file:
+# - definire uno stato iniziale coerente con "Il Sigillo della Carne"
+# - offrire helper semplici per GUI e DM engine (affinità, outfit, memoria NPC)
+#
+# Nota contenuti:
+# - ambientazione dark medieval-fantasy, ADULT (18+)
+# - qui NON descriviamo atti sessuali espliciti: è solo stato/setting.
+# =============================================================================
+
+
+# ---------------------------------------------------------------------------
+# CONFIGURAZIONE INIZIALE NPC (sempre adulti 18+)
+# ---------------------------------------------------------------------------
+
+NPC_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "Luna": {
-        "outfit": "Strict grey blazer, black pencil skirt, sheer black pantyhose, glasses",
-        "memory": "Professor Luna. Stern and authoritative, she does not tolerate distractions. She is watching you closely.",
-        "initial_affinity": 5
+        "age_note": "Adult (30s), 18+",
+        "outfit": (
+            "bare legs,  pubic hair coming out, small crumpled shorts, barefoot, "
+            "black pantyhose, subtle scars, medieval fantasy"
+        ),
+        "memory": (
+            "Luna è la tua complice di lunga data: ironica, tagliente, lucida quando serve. "
+            "Tra te e lei c'è confidenza alta e prese in giro affettuose: non siete estranei. "
+            "Si è appena risvegliata con te nelle celle del Bastione dei Sospiri. "
+            "Sulla sua pelle pulsa un marchio viola: il Sigillo della Chiave. "
+            "Lo nasconde dietro battute, ma la cosa la preoccupa."
+        ),
+        "initial_affinity": 8,
     },
     "Stella": {
-        "outfit": "Short plaid pleated skirt, white button-up shirt, knee-high socks, loose tie",
-        "memory": "Your classmate Stella. Mischievous, arrogant and amused by your bold behavior. She thinks she is better than you.",
-        "initial_affinity": 10
+        "age_note": "Adult (18+)",
+        "outfit": (
+            "torn noble silk dress, loosened corset, pale skin, "
+            "iron shackles marks on wrists, medieval fantasy"
+        ),
+        "memory": (
+            "Stella è una nobildonna adulta rapita: ingenua, fragile, bisognosa di protezione. "
+            "All'inizio è solo un obiettivo e una presenza indiretta (voci, tracce, indizi). "
+            "Non deve comparire fisicamente prima del momento giusto."
+        ),
+        "initial_affinity": 0,
     },
     "Maria": {
-        "outfit": "Blue industrial custodian jumpsuit, messy bun, heavy work boots, smudged makeup",
-        "memory": "The school janitor Maria. Reclusive, blunt and focused on her heavy labor. She avoids eye contact.",
-        "initial_affinity": 2
-    }
+        "age_note": "Adult (18+)",
+        "outfit": (
+            "black inquisitor leather armor, high boots, iron sigils, "
+            "veil, cold gaze, whip at belt, medieval dark fantasy"
+        ),
+        "memory": (
+            "Maria è la Grande Inquisitrice: dominante, perfida, usa seduzione e tortura "
+            "come strumenti di potere. Nel Bastione è una presenza costante: messaggi, rituali, "
+            "tracce e minacce. È l'antagonista centrale della campagna."
+        ),
+        "initial_affinity": -3,
+    },
 }
 
 
-def create_initial_game_state(companion_name: str = "Luna") -> Dict[str, Any]:
-    """
-    Inizializza lo stato del gioco da zero.
-    Crea la struttura dati necessaria per gestire 3 personaggi separati.
-    """
-    # Se il nome non è valido, usa Luna come fallback
-    start_data = NPC_DEFAULTS.get(companion_name, NPC_DEFAULTS["Luna"])
+# ---------------------------------------------------------------------------
+# Creazione stato iniziale (coerente con ATTO 1 / celle)
+# ---------------------------------------------------------------------------
 
-    return {
+def create_initial_game_state(companion_name: str = "Luna") -> Dict[str, Any]:
+    """Crea uno stato iniziale coerente con la campagna.
+
+    Chiavi principali (attese dal resto dell'app):
+    - turn, companion_name, location
+    - affinity_scores (dict per personaggio)
+    - gold, inventory
+    - current_outfit, npc_memory_text
+    - npc_storage (DB degli NPC)
+    - story_summary, main_quest
+    - last_roll
+    """
+
+    # Normalizza companion
+    if not companion_name or companion_name not in NPC_DEFAULTS:
+        companion_name = "Luna"
+
+    start_data = NPC_DEFAULTS[companion_name]
+
+    state: Dict[str, Any] = {
+        # --- TURN / POSIZIONE ---
         "turn": 1,
         "companion_name": companion_name,
-        "location": "St. Jude's Academy - Classroom",  # Location iniziale default
+        "location": "Bastione dei Sospiri - Sotterranei dell'Oblio - Celle",
 
-        # --- TRACKING AFFINITÀ SEPARATO (CRUCIALE) ---
-        # L'LLM leggerà e aggiornerà questo dizionario invece di un singolo numero.
+        # --- TRACKING AFFINITÀ (SEPARATO) ---
         "affinity_scores": {
-            "Luna": NPC_DEFAULTS["Luna"]["initial_affinity"],
-            "Stella": NPC_DEFAULTS["Stella"]["initial_affinity"],
-            "Maria": NPC_DEFAULTS["Maria"]["initial_affinity"]
+            "Luna": int(NPC_DEFAULTS["Luna"]["initial_affinity"]),
+            "Stella": int(NPC_DEFAULTS["Stella"]["initial_affinity"]),
+            "Maria": int(NPC_DEFAULTS["Maria"]["initial_affinity"]),
         },
 
-        "gold": 50,
-        "inventory": ["Smartphone", "Backpack", "Student ID"],
+        # --- RISORSE ---
+        "gold": 0,
+        "inventory": [],  # vi siete svegliati disarmati
 
-        # --- STATO ATTIVO CORRENTE ---
-        "current_outfit": start_data["outfit"],
-        "npc_memory_text": start_data["memory"],
+        # --- STATO ATTIVO (NPC corrente) ---
+        "current_outfit": str(start_data["outfit"]),
+        "npc_memory_text": str(start_data["memory"]),
 
-        # --- DATABASE NASCOSTO (MEMORY STORAGE) ---
-        # Qui salviamo lo stato delle ragazze quando NON sono attive.
+        # --- DATABASE NPC (quando non sono attivi) ---
         "npc_storage": {
-            "Luna": NPC_DEFAULTS["Luna"].copy(),
-            "Stella": NPC_DEFAULTS["Stella"].copy(),
-            "Maria": NPC_DEFAULTS["Maria"].copy(),
+            "Luna": deepcopy(NPC_DEFAULTS["Luna"]),
+            "Stella": deepcopy(NPC_DEFAULTS["Stella"]),
+            "Maria": deepcopy(NPC_DEFAULTS["Maria"]),
         },
 
-        # --- MEMORIA GLOBALE DELLA STORIA ---
-        "story_summary": "Hai appena iniziato il semestre alla St. Jude's Academy.",
-        "current_act": "ATTO 1: Primo Giorno",
-        "quest_log": ["Segui la lezione di Letteratura", "Trova Stella durante la pausa"],
-        "main_quest": "Sopravvivi alla vita scolastica e seduci Luna, Stella e Maria",
+        # --- PROGRESSIONE STORIA ---
+        "current_act": "ATTO 1: I Sotterranei dell'Oblio (INIZIO)",
+        "main_quest": (
+            "Fuggire dal Bastione dei Sospiri, spezzare il Sigillo della Chiave, "
+            "salvare Stella e fermare Maria."
+        ),
+        "quest_log": [
+            "Uscire dalle celle e raggiungere i depositi del Bastione",
+            "Recuperare l'equipaggiamento base",
+            "Scoprire cosa significa il Sigillo della Chiave sulla pelle di Luna",
+        ],
+        "story_summary": (
+            "Ti risvegli nelle celle umide del Bastione dei Sospiri insieme a Luna, tua complice. "
+            "Un marchio viola — il Sigillo della Chiave — pulsa sulla sua pelle. "
+            "L'aria è densa di incenso e feromoni magici: la Brama Nera rende tutto più aggressivo e tentatore. "
+            "Prima cosa: uscire vivi dai sotterranei e recuperare l'equipaggiamento."
+        ),
 
-        # --- DADI ---
+        # --- FLAG (aiuto per LLM/DM) ---
+        "flags": {
+            "chapter": 1,
+            "stella_introduced": False,
+            "maria_presence_level": 1,  # 1=tracce/messaggi, 2=apparizioni, 3=scontro
+            "sigil_key_active": True,
+        },
+
+        # --- DADI / AZIONI ---
         "last_roll": None,
+        "last_action": "",
+        "last_roll_effect": None,
     }
 
+    return state
 
-def switch_companion_memory(game_state: Dict, new_name: str):
-    """
-    Funzione helper per scambiare i dati quando cambia la ragazza attiva.
-    Salva l'outfit/memoria della ragazza attuale nel 'npc_storage'
-    e carica quelli della nuova ragazza.
-    """
-    old_name = game_state.get("companion_name", "Luna")
 
-    # 1. SALVA lo stato della ragazza attuale (se esiste nel DB)
-    if old_name in game_state["npc_storage"]:
-        game_state["npc_storage"][old_name]["outfit"] = game_state.get("current_outfit", "")
-        game_state["npc_storage"][old_name]["memory"] = game_state.get("npc_memory_text", "")
-        # Nota: l'affinità è già in 'affinity_scores', non serve salvarla qui.
+# ---------------------------------------------------------------------------
+# Cambio compagna attiva (Luna/Stella/Maria)
+# ---------------------------------------------------------------------------
 
-    # 2. CARICA lo stato della nuova ragazza
-    if new_name in game_state["npc_storage"]:
-        data = game_state["npc_storage"][new_name]
-        game_state["current_outfit"] = data["outfit"]
-        game_state["npc_memory_text"] = data["memory"]
+def switch_companion(game_state: Dict[str, Any], new_name: str) -> None:
+    """Cambia la compagna attiva salvando outfit/memoria dell'attuale nel DB."""
+    if not isinstance(game_state, dict):
+        return
+
+    current_name = str(game_state.get("companion_name") or "Luna")
+    new_name = str(new_name or "").strip()
+
+    # salva attuale
+    storage: Dict[str, Dict[str, Any]] = game_state.get("npc_storage") or {}
+    if isinstance(storage, dict) and current_name in storage:
+        storage[current_name]["outfit"] = str(game_state.get("current_outfit", ""))
+        storage[current_name]["memory"] = str(game_state.get("npc_memory_text", ""))
+
+    # carica nuovo
+    if isinstance(storage, dict) and new_name in storage:
+        data = storage[new_name]
         game_state["companion_name"] = new_name
+        game_state["current_outfit"] = str(data.get("outfit", ""))
+        game_state["npc_memory_text"] = str(data.get("memory", ""))
     else:
-        # Fallback se il nome è nuovo/sconosciuto
-        game_state["companion_name"] = new_name
-        game_state["current_outfit"] = "standard school uniform"
-        game_state["npc_memory_text"] = f"Hai appena incontrato {new_name}."
+        # fallback sicuro: non inventiamo un personaggio moderno/strano
+        game_state["companion_name"] = "Luna"
+        data = storage.get("Luna", NPC_DEFAULTS["Luna"])
+        game_state["current_outfit"] = str(data.get("outfit", NPC_DEFAULTS["Luna"]["outfit"]))
+        game_state["npc_memory_text"] = str(data.get("memory", NPC_DEFAULTS["Luna"]["memory"]))
 
+
+# ---------------------------------------------------------------------------
+# Dadi
+# ---------------------------------------------------------------------------
 
 def roll_d20() -> int:
-    """Tiro di dado con vantaggio nascosto per evitare frustrazione."""
+    """Tiro D20 con piccolo vantaggio nascosto (anti-frustrazione).
+
+    Regola: l'app può applicare un lieve vantaggio. Il DM deve trattare last_roll come finale.
+    """
     roll_base = random.randint(1, 20)
-    roll_cheat = random.randint(8, 20)  # Minimo 8 per aiutare la narrazione
+    roll_cheat = random.randint(8, 20)  # min 8: aiuta a far avanzare la storia
     return max(roll_base, roll_cheat)
 
 
-def update_game_state_after_roll(game_state: Dict, action: str, roll: int):
-    """Registra l'ultimo tiro nel game_state per l'LLM."""
-    game_state["last_roll"] = roll
+def update_game_state_after_roll(game_state: Dict[str, Any], action: str, roll: int) -> None:
+    """Registra l'ultimo tiro e l'azione tentata."""
+    if not isinstance(game_state, dict):
+        return
+    game_state["last_roll"] = int(roll)
+    game_state["last_action"] = str(action or "").strip()
 
 
-def build_state_summary_text(game_state: Dict) -> str:
-    """
-    Crea il testo per il pannello laterale della GUI.
-    Ora gestisce correttamente la visualizzazione di TUTTE le affinità.
-    """
-    quest_text = "\n- ".join(game_state.get("quest_log", []))
-    if not quest_text: quest_text = "Nessun obiettivo attivo."
+# ---------------------------------------------------------------------------
+# UI helper: testo riassuntivo per pannello laterale
+# ---------------------------------------------------------------------------
 
-    # --- GESTIONE VISUALIZZAZIONE AFFINITÀ ---
-    aff = game_state.get("affinity_scores", {})
-    if isinstance(aff, dict):
-        # Formatta come: L=10 | S=15 | M=2
-        aff_str = " | ".join([f"{k[0]}={v}" for k, v in aff.items()])
+def build_state_summary_text(game_state: Dict[str, Any]) -> str:
+    """Crea il testo per il pannello laterale della GUI."""
+    if not isinstance(game_state, dict):
+        return ""
+
+    aff: Dict[str, Any] = game_state.get("affinity_scores") or {}
+    def _aff(name: str) -> str:
+        v = aff.get(name, "?")
+        return str(v)
+
+    inv = game_state.get("inventory") or []
+    inv_text = ", ".join(map(str, inv)) if inv else "—"
+
+    qlog = game_state.get("quest_log") or []
+    if isinstance(qlog, list) and qlog:
+        quest_text = "\n- " + "\n- ".join(str(x) for x in qlog if str(x).strip())
     else:
-        aff_str = str(aff)
+        quest_text = "\n- —"
+
+    last_roll = game_state.get("last_roll")
+    roll_text = f"{last_roll}" if last_roll is not None else "—"
+
+    act = str(game_state.get("current_act") or "—")
 
     return (
-        f"--- {game_state.get('current_act', 'Atto ?')} ---\n\n"
-        f"Compagna: {game_state.get('companion_name')}\n"
-        f"Outfit: {game_state.get('current_outfit')}\n"
-        f"Affinità: [{aff_str}]\n"
-        f"Luogo: {game_state.get('location')}\n\n"
+        f"Turno: {game_state.get('turn')}\n"
+        f"Luogo: {game_state.get('location')}\n"
+        f"Atto: {act}\n\n"
+        f"Compagna attiva: {game_state.get('companion_name')}\n"
+        f"Affinità → Luna: {_aff('Luna')} | Stella: {_aff('Stella')} | Maria: {_aff('Maria')}\n\n"
+        f"Oro: {game_state.get('gold')}\n"
+        f"Inventario: {inv_text}\n"
+        f"Ultimo tiro: {roll_text}\n\n"
         f"[MEMORIA {game_state.get('companion_name')}]:\n"
-        f"\"{game_state.get('npc_memory_text', '')}\"\n\n"
-        f"OBIETTIVI:\n- {quest_text}"
+        f"“{game_state.get('npc_memory_text', '')}”\n\n"
+        f"OBIETTIVI:{quest_text}"
     )
 
 
-def update_story_summary(game_state: Dict, new_text: str, max_words=300):
+# ---------------------------------------------------------------------------
+# Memoria globale: riassunto storia (cap a N parole)
+# ---------------------------------------------------------------------------
+
+def update_story_summary(game_state: Dict[str, Any], new_text: str, max_words: int = 300) -> None:
     """Aggiorna il riassunto della storia mantenendolo conciso."""
-    current = game_state.get("story_summary", "")
-    updated = f"{current} {new_text}".strip()
+    if not isinstance(game_state, dict):
+        return
+
+    current = str(game_state.get("story_summary", "") or "")
+    incoming = str(new_text or "").strip()
+    if not incoming:
+        return
+
+    updated = f"{current} {incoming}".strip()
     words = updated.split()
     if len(words) > max_words:
         updated = " ".join(words[-max_words:])
