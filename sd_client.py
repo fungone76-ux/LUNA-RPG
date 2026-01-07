@@ -29,6 +29,10 @@ SD_URL = _get_env("SD_URL", "http://127.0.0.1:7860").rstrip("/")
 SD_TXT2IMG_ENDPOINT = f"{SD_URL}/sdapi/v1/txt2img"
 SD_OPTIONS_ENDPOINT = f"{SD_URL}/sdapi/v1/options"
 
+# Endpoint per la gestione della staffetta VRAM
+SD_UNLOAD_ENDPOINT = f"{SD_URL}/sdapi/v1/unload-checkpoint"
+SD_RELOAD_ENDPOINT = f"{SD_URL}/sdapi/v1/reload-checkpoint"
+
 OUTPUT_DIR = Path(_get_env("SD_OUTPUT_DIR", "storage/images"))
 
 # Timeout lungo (tu vuoi 720s)
@@ -49,13 +53,37 @@ _SESSION = requests.Session()
 
 
 # ---------------------------------------------------------------------------
+# VRAM Management (Staffetta)
+# ---------------------------------------------------------------------------
+
+def unload_checkpoint() -> bool:
+    """Sposta il modello di Stable Diffusion dalla VRAM alla RAM di sistema."""
+    try:
+        print("[SD] Richiesta Unload Checkpoint per liberare VRAM...")
+        r = _SESSION.post(SD_UNLOAD_ENDPOINT, timeout=15, auth=AUTH, verify=VERIFY_TLS)
+        return r.status_code == 200
+    except Exception as e:
+        print(f"[SD] Errore durante l'unload: {e}")
+        return False
+
+def reload_checkpoint() -> bool:
+    """Riporta il modello di Stable Diffusion nella VRAM."""
+    try:
+        print("[SD] Richiesta Reload Checkpoint...")
+        r = _SESSION.post(SD_RELOAD_ENDPOINT, timeout=15, auth=AUTH, verify=VERIFY_TLS)
+        return r.status_code == 200
+    except Exception as e:
+        print(f"[SD] Errore durante il reload: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Healthcheck
 # ---------------------------------------------------------------------------
 
 def check_connection() -> bool:
     """
     Verifica rapida se l'API A1111 è raggiungibile.
-    Usa un endpoint API reale (options), non la root.
     """
     try:
         r = _SESSION.get(SD_OPTIONS_ENDPOINT, timeout=8, auth=AUTH, verify=VERIFY_TLS)
@@ -65,7 +93,7 @@ def check_connection() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Scelta formato (tua logica invariata)
+# Scelta formato (tua logica originale)
 # ---------------------------------------------------------------------------
 
 def choose_image_size(
@@ -114,7 +142,6 @@ def generate_image_from_prompts(
 ) -> Optional[str]:
     """
     Invia la richiesta a Automatic1111 e salva l'immagine.
-    Parametri: DPM++ 2M Karras, Steps 24, CFG 7 (come il tuo).
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -173,27 +200,20 @@ def generate_image_from_prompts(
         print(f"[SD] HTTP error: status={status}")
         if body:
             print(f"[SD] Risposta (prime 400): {body[:400]}")
-        # 401 = auth sbagliata/mancante
         return None
 
     except requests.exceptions.ConnectionError:
         print(f"[SD] ERRORE: Impossibile connettersi a {SD_URL}.")
-        print("     Controlla che A1111 sia avviato con '--api' e che la porta 7860 sia esposta su RunPod.")
         return None
 
     except requests.exceptions.Timeout:
         print(f"[SD] TIMEOUT dopo {TIMEOUT_SECONDS}s su {SD_URL}.")
-        print("     Se usi proxy RunPod e fai job pesanti, valuta TCP mapping oppure alza SD_TIMEOUT_SECONDS.")
         return None
 
     except Exception as e:
         print(f"[SD] Errore generico durante la generazione: {e}")
         return None
 
-
-# ---------------------------------------------------------------------------
-# Mini test manuale
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     print("[SD] check_connection():", check_connection())
