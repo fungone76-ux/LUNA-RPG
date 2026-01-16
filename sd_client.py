@@ -1,8 +1,7 @@
 """
 Client ottimizzato per Stable Diffusion (SD-Next / Automatic1111).
-- Carica correttamente il file .env.
+- Fix Sampler: impostato su 'Euler a' per compatibilità Diffusers (RTX 4090).
 - AUTENTICAZIONE COMPLETAMENTE RIMOSSA per evitare errore 401.
-- Mantiene la logica originale di scelta risoluzione e salvataggio immagini.
 """
 
 from __future__ import annotations
@@ -39,9 +38,10 @@ VERIFY_TLS = _get_env("SD_VERIFY_TLS", "1") not in ("0", "false", "False", "no",
 # --- RIMOZIONE TOTALE AUTENTICAZIONE ---
 AUTH = None
 
-# Sessione requests forzata senza auth
+# Sessione requests forzata senza auth e senza header sporchi
 _SESSION = requests.Session()
 _SESSION.auth = None
+_SESSION.headers.update({"Authorization": ""})
 # ---------------------------------------
 
 def unload_checkpoint() -> bool:
@@ -93,15 +93,17 @@ def generate_image_from_prompts(
     height: int = 1152,
     seed: int = -1,
 ) -> Optional[str]:
+    """Invia la richiesta di generazione e salva l'immagine."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    # FIX: Sampler cambiato in "Euler a" per compatibilità SD-Next/Diffusers
     payload = {
         "prompt": positive_prompt,
         "negative_prompt": negative_prompt,
         "width": width,
         "height": height,
         "seed": seed,
-        "sampler_name": "DPM++ 2M Karras",
+        "sampler_name": "Euler a",
         "steps": 24,
         "cfg_scale": 7,
         "override_settings": {
@@ -113,7 +115,6 @@ def generate_image_from_prompts(
     print(f"[SD] Generazione in corso...")
 
     try:
-        # Nota: 'auth' rimosso dalla chiamata post
         response = _SESSION.post(
             SD_TXT2IMG_ENDPOINT,
             json=payload,
@@ -123,11 +124,16 @@ def generate_image_from_prompts(
         response.raise_for_status()
         r = response.json()
 
+        if "images" not in r or not r["images"]:
+            print("[SD] Errore: Nessuna immagine ricevuta.")
+            return None
+
         image_data = r["images"][0].split(",")[-1]
         image_bytes = base64.b64decode(image_data)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filepath = OUTPUT_DIR / f"scene_{timestamp}.png"
+        filename = f"scene_{timestamp}.png"
+        filepath = OUTPUT_DIR / filename
 
         with open(filepath, "wb") as f:
             f.write(image_bytes)
